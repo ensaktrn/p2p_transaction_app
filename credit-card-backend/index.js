@@ -24,20 +24,18 @@ const createTables = async () => {
       card_number VARCHAR(16) UNIQUE NOT NULL,
       cardholder_name VARCHAR(100) NOT NULL,
       cvv VARCHAR(3) NOT NULL,
-      balance DECIMAL(10,2) NOT NULL
+      balance DECIMAL(10,2) NOT NULL,
+      user_id INT REFERENCES users(id) ON DELETE CASCADE
     );
   `);
   console.log("Cards table is ready!");
 };
 createTables();
 
-const tokenBlacklist = new Set();
-
+// JWT Token Doğrulama Middleware
 const authenticateToken = (req, res, next) => {
   const token = req.headers.authorization?.split(" ")[1];
   if (!token) return res.status(401).json({ error: "Unauthorized" });
-
-  if (tokenBlacklist.has(token)) return res.status(403).json({ error: "Token is invalid" });
 
   jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
     if (err) return res.status(403).json({ error: "Invalid token" });
@@ -47,17 +45,34 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
-// Kullanıcı Çıkışı (Logout)
-app.post("/logout", authenticateToken, (req, res) => {
-  const token = req.headers.authorization?.split(" ")[1];
-  if (!token) return res.status(400).json({ error: "No token provided" });
-
-  tokenBlacklist.add(token);
-  res.json({ message: "Logout successful" });
+app.get("/my-cards", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM cards WHERE user_id = $1", [req.user.id]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 
-// Kullanıcıya Ait Kartları Doğrulama
+//Kart ekleme
+app.post("/add-card", authenticateToken, async (req, res) => {
+  const { card_number, cvv, balance } = req.body;
+  const user_id = req.user.id; // Kullanıcı kimliği token’dan alınıyor
+
+  try {
+    const result = await pool.query(
+      "INSERT INTO cards (card_number, cvv, balance, user_id) VALUES ($1, $2, $3, $4) RETURNING *",
+      [card_number, cvv, balance, user_id]
+    );
+
+    res.json({ message: "Card added successfully", card: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+//Kart dogrulama
 app.post("/validate-card", authenticateToken, async (req, res) => {
   const { card_number, cvv } = req.body;
 
@@ -76,12 +91,7 @@ app.post("/validate-card", authenticateToken, async (req, res) => {
 });
 
 
-app.listen(process.env.PORT, () => {
-  console.log(`Credit Card Backend running on port ${process.env.PORT}`);
-});
-
-// Bakiye Yükleme (Top-up)
-app.post("/top-up", async (req, res) => {
+app.post("/top-up", authenticateToken, async (req, res) => {
   const { card_number, cvv, amount } = req.body;
 
   if (!amount || amount <= 0) {
@@ -89,56 +99,42 @@ app.post("/top-up", async (req, res) => {
   }
 
   try {
-    // Kart doğrulama
+    // Kart doğrulama ve bakiyesini kontrol et
     const cardResult = await pool.query(
-      "SELECT * FROM cards WHERE card_number = $1 AND cvv = $2",
-      [card_number, cvv]
+      "SELECT * FROM cards WHERE card_number = $1 AND cvv = $2 AND user_id = $3",
+      [card_number, cvv, req.user.id]
     );
 
     if (cardResult.rows.length === 0) {
-      return res.status(400).json({ error: "Invalid card" });
+      return res.status(400).json({ error: "Invalid card or not owned by user" });
     }
 
     const card = cardResult.rows[0];
 
-    // Kartın yeterli bakiyesi var mı?
     if (card.balance < amount) {
       return res.status(400).json({ error: "Insufficient card balance" });
     }
 
-    // Kartın bakiyesini düşür
-    await pool.query(
-      "UPDATE cards SET balance = balance - $1 WHERE card_number = $2",
-      [amount, card_number]
-    );
+    // Transaction başlat
+    await pool.query("BEGIN");
+
+    // Karttan bakiyeyi düş
+    await pool.query("UPDATE cards SET balance = balance - $1 WHERE card_number = $2", [amount, card_number]);
+
+    // Kullanıcının bakiyesini artır
+    await pool.query("UPDATE users SET balance = balance + $1 WHERE id = $2", [amount, req.user.id]);
+
+    // İşlem başarılıysa commit et
+    await pool.query("COMMIT");
 
     res.json({ message: "Balance topped up successfully" });
   } catch (err) {
+    await pool.query("ROLLBACK"); // Hata olursa geri al
     res.status(500).json({ error: err.message });
   }
 });
 
-// Kullanıcının Sahip Olduğu Kartları Listeleme
-app.get("/my-cards", authenticateToken, async (req, res) => {
-  try {
-    const result = await pool.query("SELECT * FROM cards WHERE user_id = $1", [req.user.id]);
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
-// Kullanıcıya Kredi Kartı Ekleme
-app.post("/add-card", authenticateToken, async (req, res) => {
-  const { card_number, cardholder_name, cvv, balance } = req.body;
-
-  try {
-    const result = await pool.query(
-      "INSERT INTO cards (card_number, cardholder_name, cvv, balance, user_id) VALUES ($1, $2, $3, $4, $5) RETURNING *",
-      [card_number, cardholder_name, cvv, balance, req.user.id]
-    );
-    res.json({ message: "Card added successfully", card: result.rows[0] });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+app.listen(process.env.PORT, () => {
+  console.log(`Credit Card Backend running on port ${process.env.PORT}`);
 });

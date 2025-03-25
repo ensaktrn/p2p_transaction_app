@@ -37,19 +37,24 @@ createTables();
 
 // Kullanıcı Kaydı (Register)
 app.post("/register", async (req, res) => {
-  const { username, password } = req.body;
-  const hashedPassword = await bcrypt.hash(password, 10);
+  const { username, password, full_name, phone, email } = req.body;
 
   try {
+    // Şifreyi hashle
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Kullanıcıyı ekle
     const result = await pool.query(
-      "INSERT INTO users (username, password) VALUES ($1, $2) RETURNING *",
-      [username, hashedPassword]
+      "INSERT INTO users (username, password, full_name, phone, email) VALUES ($1, $2, $3, $4, $5) RETURNING *",
+      [username, hashedPassword, full_name, phone, email]
     );
+
     res.json({ message: "User registered", user: result.rows[0] });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 // Güncellenmiş JWT Middleware: Kara Listeyi Kontrol Eder
 const authenticateToken = (req, res, next) => {
@@ -84,14 +89,34 @@ app.post("/login", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-  // Kullanıcı Profilini Görüntüleme
+
+// Kullanıcı Profilini Görüntüleme
 app.get("/profile", authenticateToken, async (req, res) => {
   try {
-    const result = await pool.query("SELECT username, balance FROM users WHERE id = $1", [req.user.id]);
-  
+    const result = await pool.query(
+      "SELECT username, full_name, phone, email FROM users WHERE id = $1",
+      [req.user.id]
+    );
+
     if (result.rows.length === 0) return res.status(404).json({ error: "User not found" });
 
     res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Kullanıcı Profili Güncelleme
+app.put("/update-profile", authenticateToken, async (req, res) => {
+  const { full_name, phone, email } = req.body;
+
+  try {
+    await pool.query(
+      "UPDATE users SET full_name = $1, phone = $2, email = $3 WHERE id = $4",
+      [full_name, phone, email, req.user.id]
+    );
+
+    res.json({ message: "Profile updated successfully" });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -128,20 +153,19 @@ app.post("/logout", authenticateToken, (req, res) => {
   res.json({ message: "Logout successful" });
 });
 
-// Kullanıcının Bakiyesini Güncelle (Top-up işlemi sonrası)
-app.post("/add-balance", authenticateToken, async (req, res) => {
-  const { amount } = req.body;
 
-  if (!amount || amount <= 0) {
-    return res.status(400).json({ error: "Invalid amount" });
-  }
-
+app.get("/balance", authenticateToken, async (req, res) => {
   try {
-    await pool.query("UPDATE users SET balance = balance + $1 WHERE id = $2", [amount, req.user.id]);
+    const result = await pool.query(
+      "SELECT balance FROM users WHERE id = $1",
+      [req.user.id]
+    );
 
-    res.json({ message: "Balance updated successfully" });
+    res.json({ balance: result.rows[0].balance });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
+
+
 
