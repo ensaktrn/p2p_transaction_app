@@ -54,42 +54,35 @@ app.get("/my-cards", authenticateToken, async (req, res) => {
   }
 });
 
-
 //Kart ekleme
-app.post("/add-card", authenticateToken, async (req, res) => {
-  const { card_number, cvv, balance } = req.body;
-  const user_id = req.user.id; // Kullanıcı kimliği token’dan alınıyor
+app.post("/add-card",authenticateToken, async (req, res) => {
+  const { cardNumber, holderName, expiryDate, cvv, balance } = req.body;
+  const userId = req.user.id;
 
-  try {
-    const result = await pool.query(
-      "INSERT INTO cards (card_number, cvv, balance, user_id) VALUES ($1, $2, $3, $4) RETURNING *",
-      [card_number, cvv, balance, user_id]
-    );
+    try {
+        // Check if the card exists in valid_cards
+        const validCard = await pool.query(
+            "SELECT * FROM valid_cards WHERE card_number = $1 AND holder_name = $2 AND expiry_date = $3 AND cvv = $4",
+            [cardNumber, holderName, expiryDate, cvv]
+        );
 
-    res.json({ message: "Card added successfully", card: result.rows[0] });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+        if (validCard.rows.length === 0) {
+            return res.status(400).json({ error: "Invalid card details" });
+        }
+
+        // If valid, add to user's cards
+        await pool.query(
+            "INSERT INTO cards (card_number, holder_name, expiry_date, cvv, user_id, balance) VALUES ($1, $2, $3, $4, $5, $6)",
+            [cardNumber, holderName, expiryDate, cvv, userId, balance]
+        );
+
+        res.json({ message: "Card added successfully" });
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Database error" });
+    }
 });
-
-//Kart dogrulama
-app.post("/validate-card", authenticateToken, async (req, res) => {
-  const { card_number, cvv } = req.body;
-
-  try {
-    const result = await pool.query(
-      "SELECT * FROM cards WHERE card_number = $1 AND cvv = $2 AND user_id = $3",
-      [card_number, cvv, req.user.id]
-    );
-
-    if (result.rows.length === 0) return res.status(400).json({ error: "Invalid card or not owned by user" });
-
-    res.json({ message: "Card validated", card: result.rows[0] });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 
 app.post("/top-up", authenticateToken, async (req, res) => {
   const { card_number, cvv, amount } = req.body;

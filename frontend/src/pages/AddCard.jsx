@@ -1,51 +1,109 @@
 import { useState } from "react";
-import axios from "axios";
-import { Container, Form, Button, Card } from "react-bootstrap";
-import { useNavigate } from "react-router-dom";
 
-function AddCard({ token }) {
-  const [card, setCard] = useState({ card_number: "", cvv: "", balance: "" });
-  const navigate = useNavigate();
+const AddCard = () => {
+    const [cardNumber, setCardNumber] = useState("");
+    const [holderName, setHolderName] = useState("");
+    const [expiryDate, setExpiryDate] = useState("");
+    const [cvv, setCvv] = useState("");
+    const [balance, setBalance] = useState(0);
+    const [message, setMessage] = useState("");
 
-  const handleChange = (e) => setCard({ ...card, [e.target.name]: e.target.value });
+    const handleAddCard = async () => {
+        setMessage("");
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    try {
-      await axios.post("http://localhost:4000/add-card", card, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      alert("Card added successfully!");
-      navigate("/dashboard"); // Kart ekleyince Dashboard'a yönlendir
-    } catch (error) {
-      alert("Failed to add card");
-    }
-  };
+        if (!cardNumber || !holderName || !expiryDate || !cvv || !balance) {
+            setMessage("All fields are required");
+            return;
+        }
 
-  return (
-    <Container className="d-flex justify-content-center align-items-center vh-100">
-      <Card className="p-4 w-50">
-        <h2 className="text-center">Add a New Card</h2>
-        <Form onSubmit={handleSubmit}>
-          <Form.Group>
-            <Form.Control type="text" name="card_number" placeholder="Card Number" onChange={handleChange} required />
-          </Form.Group>
-          <Form.Group>
-            <Form.Control type="text" name="cvv" placeholder="CVV" onChange={handleChange} required />
-          </Form.Group>
-          <Form.Group>
-            <Form.Control type="number" name="balance" placeholder="Initial Balance" onChange={handleChange} required />
-          </Form.Group>
-          <Button type="submit" variant="primary" className="w-100 mt-2">
-            Add Card
-          </Button>
-        </Form>
-        <p className="text-center mt-2">
+        try {
+            const response = await fetch("http://localhost:4000/add-card", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${localStorage.getItem("token")}`
+                },
+                body: JSON.stringify({ cardNumber, holderName, expiryDate, cvv, balance }),
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                setMessage("Card added successfully");
+                setCardNumber("");
+                setHolderName("");
+                setExpiryDate("");
+                setCvv("");
+                setBalance("");
+                navigate("/dashboard");
+            } else {
+                setMessage(data.error || "Failed to add card");
+            }
+
+        } catch (error) {
+            setMessage("Error connecting to server");
+        }
+    };
+
+    return (
+        <div className="container mt-4">
+            <h2>Add a New Card</h2>
+            <div className="mb-3">
+                <label className="form-label">Card Number:</label>
+                <input
+                    type="text"
+                    className="form-control"
+                    value={cardNumber}
+                    onChange={(e) => setCardNumber(e.target.value)}
+                    maxLength="16"
+                />
+            </div>
+            <div className="mb-3">
+                <label className="form-label">Cardholder Name:</label>
+                <input
+                    type="text"
+                    className="form-control"
+                    value={holderName}
+                    onChange={(e) => setHolderName(e.target.value)}
+                />
+            </div>
+            <div className="mb-3">
+                <label className="form-label">Expiry Date:</label>
+                <input
+                    type="date"
+                    className="form-control"
+                    value={expiryDate}
+                    onChange={(e) => setExpiryDate(e.target.value)}
+                />
+            </div>
+            <div className="mb-3">
+                <label className="form-label">CVV:</label>
+                <input
+                    type="text"
+                    className="form-control"
+                    value={cvv}
+                    onChange={(e) => setCvv(e.target.value)}
+                    maxLength="3"
+                />
+            </div>
+            <div className="mb-3">
+                <label className="form-label">Expiry Date:</label>
+                <input
+                    type="number"
+                    className="form-control"
+                    value={balance}
+                    onChange={(e) => setBalance(e.target.value)}
+                />
+            </div>
+            <button className="btn btn-primary" onClick={handleAddCard}>
+                Add Card
+            </button>
+            {message && <p className="mt-3">{message}</p>}
+            <p className="text-center mt-2">
           <a href="/dashboard">Back to Dashboard</a>
         </p>
-      </Card>
-    </Container>
-  );
-}
+        </div>
+    );
+};
 
 export default AddCard;
