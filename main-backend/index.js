@@ -8,7 +8,7 @@ const cors = require("cors");
 const app = express();
 app.use(express.json());
 app.use(cors());
-
+const router = express.Router();
 const pool = new Pool({
   user: process.env.DB_USER,
   host: process.env.DB_HOST,
@@ -71,12 +71,91 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
+// **🔒 Admin Girişi**
+router.post("/admin/login", async (req, res) => {
+  const { username, password } = req.body;
+  if (username !== "admin" || password !== process.env.ADMIN_PASS) {
+    return res.status(401).json({ error: "Yetkisiz giriş!" });
+  }
+  const token = jwt.sign({ role: "admin" }, process.env.JWT_SECRET, { expiresIn: "2h" });
+  res.json({ token });
+});
+
+// **📌 Tüm Kullanıcıları Listele**
+router.get("/admin/users", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT id, name, email FROM users");
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: "Veritabanı hatası" });
+  }
+});
+
+// **📌 Kullanıcıya Bakiye Ekleme**
+router.post("/admin/users/:id/balance", async (req, res) => {
+  const { id } = req.params;
+  const { amount } = req.body;
+
+  if (!amount || amount <= 0) {
+    return res.status(400).json({ error: "Geçersiz miktar" });
+  }
+
+  try {
+    await pool.query("UPDATE users SET balance = balance + $1 WHERE id = $2", [amount, id]);
+    res.json({ message: "Bakiye eklendi!" });
+  } catch (err) {
+    res.status(500).json({ error: "Veritabanı hatası" });
+  }
+});
+
+// **📌 Tüm Kartları Listele**
+router.get("/admin/cards", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM cards");
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: "Veritabanı hatası" });
+  }
+});
+
+// **📌 Yeni Kart Ekleme**
+router.post("/admin/cards", async (req, res) => {
+  const { card_number, holder_name, expiry_date, cvv } = req.body;
+  if (!card_number || !holder_name || !expiry_date || !cvv) {
+    return res.status(400).json({ error: "Eksik kart bilgileri" });
+  }
+
+  try {
+    await pool.query(
+      "INSERT INTO cards (card_number, holder_name, expiry_date, cvv) VALUES ($1, $2, $3, $4)",
+      [card_number, holder_name, expiry_date, cvv]
+    );
+    res.json({ message: "Kart eklendi!" });
+  } catch (err) {
+    res.status(500).json({ error: "Veritabanı hatası" });
+  }
+});
+
+// **📌 Kart Silme**
+router.delete("/admin/cards/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    await pool.query("DELETE FROM cards WHERE id = $1", [id]);
+    res.json({ message: "Kart silindi!" });
+  } catch (err) {
+    res.status(500).json({ error: "Veritabanı hatası" });
+  }
+});
+
+module.exports = router;
+
 // Kullanıcı Girişi (Login)
 app.post("/login", async (req, res) => {
   const { username, password } = req.body;
 
   try {
     const result = await pool.query("SELECT * FROM users WHERE username = $1", [username]);
+    
     if (result.rows.length === 0) return res.status(400).json({ error: "User not found" });
 
     const user = result.rows[0];
@@ -167,5 +246,97 @@ app.get("/balance", authenticateToken, async (req, res) => {
   }
 });
 
+app.post('/transfer', authenticateToken, async (req, res) => {
+  const { recipientId, amount } = req.body;
+  const senderId = req.user.id;
+
+  if (!recipientId || !amount || amount <= 0) {
+      return res.status(400).json({ error: "Invalid recipient or amount" });
+  }
+
+  try {
+      const sender = await pool.query("SELECT balance FROM users WHERE id = $1", [senderId]);
+      const recipient = await pool.query("SELECT balance FROM users WHERE id = $1", [recipientId]);
+
+      if (sender.rows.length === 0 || recipient.rows.length === 0) {
+          return res.status(404).json({ error: "User not found" });
+      }
+
+      if (sender.rows[0].balance < amount) {
+          return res.status(400).json({ error: "Insufficient balance" });
+      }
+
+      await pool.query("UPDATE users SET balance = balance - $1 WHERE id = $2", [amount, senderId]);
+      await pool.query("UPDATE users SET balance = balance + $1 WHERE id = $2", [amount, recipientId]);
+
+      await pool.query(
+          "INSERT INTO transactions (sender_id, recipient_id, amount, created_at) VALUES ($1, $2, $3, NOW())",
+          [senderId, recipientId, amount]
+      );
+
+      res.json({ message: "Transaction successful" });
+
+  } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+
+router.post("/request-money", authenticateToken, async (req, res) => {
+  const { fromUserId, amount } = req.body;
+  const toUserId = req.user.id;
+
+  if (!fromUserId || !amount || amount <= 0) {
+    return res.status(400).json({ error: "Geçersiz para talebi" });
+  }
+
+  try {
+    await pool.query(
+      "INSERT INTO money_requests (from_user, to_user, amount, status) VALUES ($1, $2, $3, 'pending')",
+      [fromUserId, toUserId, amount]
+    );
+
+    res.json({ message: "Para talebi gönderildi!" });
+  } catch (err) {
+    res.status(500).json({ error: "Veritabanı hatası" });
+  }
+});
+
+router.post("/accept-request/:id", authenticateToken, async (req, res) => {
+  const requestId = req.params.id;
+  const toUserId = req.user.id;
+
+  try {
+    const request = await pool.query("SELECT * FROM money_requests WHERE id = $1 AND to_user = $2 AND status = 'pending'", [requestId, toUserId]);
+
+    if (request.rows.length === 0) {
+      return res.status(404).json({ error: "Para talebi bulunamadı!" });
+    }
+
+    const { from_user, amount } = request.rows[0];
+
+    // Gönderenin bakiyesi yeterli mi?
+    const sender = await pool.query("SELECT balance FROM users WHERE id = $1", [from_user]);
+    if (sender.rows[0].balance < amount) {
+      return res.status(400).json({ error: "Göndericinin yeterli bakiyesi yok!" });
+    }
+
+    // Para transferini gerçekleştir
+    await pool.query("UPDATE users SET balance = balance - $1 WHERE id = $2", [amount, from_user]);
+    await pool.query("UPDATE users SET balance = balance + $1 WHERE id = $2", [amount, toUserId]);
+
+    // İşlemi kaydet ve isteği kapat
+    await pool.query(
+      "INSERT INTO transactions (sender_id, recipient_id, amount, status) VALUES ($1, $2, $3, 'completed')",
+      [from_user, toUserId, amount]
+    );
+    await pool.query("UPDATE money_requests SET status = 'accepted' WHERE id = $1", [requestId]);
+
+    res.json({ message: "Para talebi onaylandı ve transfer yapıldı!" });
+  } catch (err) {
+    res.status(500).json({ error: "Veritabanı hatası" });
+  }
+});
 
 
