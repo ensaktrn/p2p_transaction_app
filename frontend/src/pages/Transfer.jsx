@@ -1,70 +1,70 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
 const Transfer = () => {
-    const [recipientId, setRecipientId] = useState("");
-    const [amount, setAmount] = useState("");
-    const [message, setMessage] = useState("");
+  const [searchParams] = useSearchParams();
+  const prefilledUsername = searchParams.get("username") || "";
+  const [recipientUsername, setRecipientUsername] = useState(prefilledUsername);
+  const [amount, setAmount] = useState("");
+  const [message, setMessage] = useState("");
 
-    const handleTransfer = async () => {
-        setMessage("");
+  const handleTransfer = async () => {
+    setMessage("");
 
-        if (!recipientId || !amount || amount <= 0) {
-            setMessage("Invalid recipient or amount");
-            return;
-        }
+    if (!recipientUsername || !amount) {
+      setMessage("Please enter all fields.");
+      return;
+    }
 
-        try {
-            const response = await fetch("http://localhost:5001/transfer", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${localStorage.getItem("token")}`
-                },
-                body: JSON.stringify({ recipientId, amount }),
-            });
+    try {
+      const res = await fetch("http://localhost:5001/transfer", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("token")}`,
+        },
+        body: JSON.stringify({ recipientUsername, amount }),
+      });
 
-            const data = await response.json();
+      const data = await res.json();
+      if (res.ok) {
+        setMessage("Transfer successful!");
+        setRecipientUsername("");
+        setAmount("");
+      } else {
+        setMessage(data.error || "Transfer failed.");
+      }
+    } catch (error) {
+      console.error("Transfer error", error);
+      setMessage("Server error.");
+    }
+  };
 
-            if (response.ok) {
-                setMessage("Transaction successful");
-                setRecipientId("");
-                setAmount("");
-            } else {
-                setMessage(data.error || "Transaction failed");
-            }
+  return (
+    <div className="container mt-4">
+      <h2>Send Money</h2>
 
-        } catch (error) {
-            setMessage("Error processing transaction");
-        }
-    };
+      <input
+        type="text"
+        className="form-control my-2"
+        placeholder="Recipient Username"
+        value={recipientUsername}
+        onChange={(e) => setRecipientUsername(e.target.value)}
+      />
+      <input
+        type="number"
+        className="form-control my-2"
+        placeholder="Amount"
+        value={amount}
+        onChange={(e) => setAmount(e.target.value)}
+      />
+      <button className="btn btn-success" onClick={handleTransfer}>
+        Send
+      </button>
 
-    return (
-        <div className="container mt-4">
-            <h2>Money Transfer</h2>
-            <div className="mb-3">
-                <label className="form-label">Recipient ID:</label>
-                <input
-                    type="text"
-                    className="form-control"
-                    value={recipientId}
-                    onChange={(e) => setRecipientId(e.target.value)}
-                />
-            </div>
-            <div className="mb-3">
-                <label className="form-label">Amount:</label>
-                <input
-                    type="number"
-                    className="form-control"
-                    value={amount}
-                    onChange={(e) => setAmount(e.target.value)}
-                />
-            </div>
-            <button className="btn btn-primary" onClick={handleTransfer}>
-                Send Money
-            </button>
-            {message && <p className="mt-3">{message}</p>}
-        </div>
-    );
+      {message && <p className="mt-3">{message}</p>}
+    </div>
+  );
 };
 
 export default Transfer;
