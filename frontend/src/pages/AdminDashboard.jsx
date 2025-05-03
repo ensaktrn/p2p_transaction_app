@@ -69,8 +69,6 @@ function AdminDashboard() {
               <th>Email</th>
               <th>Phone</th>
               <th>Balance</th>
-              <th>Is Admin</th>
-              <th>Is Merchant</th>
               <th>Action</th>
             </tr>
           </thead>
@@ -112,15 +110,6 @@ function AdminDashboard() {
                         onChange={(e) => handleEdit(u.id, "balance", e.target.value)}
                     />
                     </td>               
-                <td>
-                  <Form.Check
-                    type="checkbox"
-                    defaultChecked={u.is_admin}
-                    onChange={(e) => handleEdit(u.id, "makeAdmin", e.target.checked)}
-                    disabled={u.is_merchant}
-                  />
-                </td>
-                <td>{u.is_merchant ? "Yes" : "No"}</td>
                 <td>
                   <Button variant="success" size="sm" onClick={() => handleUpdate(u.id)}>
                     Save
