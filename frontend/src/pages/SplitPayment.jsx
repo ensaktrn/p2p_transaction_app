@@ -1,108 +1,100 @@
 import { useState, useEffect } from "react";
-import { Container, Card, Form, Button, ListGroup } from "react-bootstrap";
-import { useNavigate } from "react-router-dom";
+import axios from "axios";
+import { Container, Card, Form, Button, Row, Col } from "react-bootstrap";
 
 function SplitPayment() {
-  const [friends, setFriends] = useState([]);
-  const [selectedFriends, setSelectedFriends] = useState([]);
-  const [totalAmount, setTotalAmount] = useState("");
+  const [amount, setAmount] = useState("");
+  const [allUsers, setAllUsers] = useState([]);
+  const [selectedUsers, setSelectedUsers] = useState([]);
   const [message, setMessage] = useState("");
-  const navigate = useNavigate();
 
+  // Tüm kullanıcıları çek
   useEffect(() => {
-    fetchFriends();
+    fetchUsers();
   }, []);
 
-  const fetchFriends = async () => {
+  const fetchUsers = async () => {
     try {
-      const res = await fetch("http://localhost:5001/friends-list", {
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem("token")}`,
-        },
+      const res = await axios.get("http://localhost:5001/users", {
+        headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
       });
-      const data = await res.json();
-      setFriends(data);
-    } catch (error) {
-      console.error("Error fetching friends", error);
-    }
-  };
-  
-  
-
-  const toggleFriend = (username) => {
-    if (selectedFriends.includes(username)) {
-      setSelectedFriends(selectedFriends.filter((u) => u !== username));
-    } else {
-      setSelectedFriends([...selectedFriends, username]);
+      setAllUsers(res.data);
+    } catch (err) {
+      console.error("Error fetching users", err);
     }
   };
 
-  const handleSplitRequest = async () => {
-    if (selectedFriends.length === 0 || !totalAmount) {
-      setMessage("Please select friends and enter an amount.");
-      return;
+  const handleCheckboxChange = (username) => {
+    setSelectedUsers((prev) =>
+      prev.includes(username)
+        ? prev.filter((u) => u !== username)
+        : [...prev, username]
+    );
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setMessage("");
+
+    if (!amount || selectedUsers.length === 0) {
+      return setMessage("Please enter an amount and select users.");
     }
 
     try {
-      const res = await fetch("http://localhost:5001/split-request", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${localStorage.getItem("token")}`,
+      const res = await axios.post(
+        "http://localhost:5001/split-payment",
+        {
+          amount: parseFloat(amount).toFixed(2),
+          participantUsernames: selectedUsers,
         },
-        body: JSON.stringify({
-          recipients: selectedFriends,
-          totalAmount,
-        }),
-      });
+        {
+          headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
+        }
+      );
 
-      const data = await res.json();
-      if (res.ok) {
-        setMessage("Split request sent successfully!");
-        setTimeout(() => navigate("/dashboard"), 2000);
-      } else {
-        setMessage(data.error || "Request failed.");
-      }
-    } catch (error) {
-      console.error("Split request error", error);
-      setMessage("Server error.");
+      setMessage(res.data.message || "Split payment successful.");
+      setAmount("");
+      setSelectedUsers([]);
+    } catch (err) {
+      setMessage(err.response?.data?.error || "Error processing payment.");
     }
   };
 
   return (
     <Container className="mt-4">
-      <Card className="p-3">
-        <h2 className="text-center mb-4">Split Payment</h2>
+      <Card className="p-4">
+        <h3 className="text-center mb-4">Split Payment</h3>
+        <Form onSubmit={handleSubmit}>
+          <Form.Group className="mb-3">
+            <Form.Control
+              type="number"
+              placeholder="Total amount"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              required
+            />
+          </Form.Group>
 
-        <Form.Group className="mb-3">
-          <Form.Control
-            type="number"
-            placeholder="Total Amount"
-            value={totalAmount}
-            onChange={(e) => setTotalAmount(e.target.value)}
-            required
-          />
-        </Form.Group>
+          <Form.Group className="mb-3">
+            <Form.Label>Select participants:</Form.Label>
+            <Row>
+              {allUsers.map((user) => (
+                <Col md={4} key={user.id}>
+                  <Form.Check
+                    type="checkbox"
+                    label={user.username}
+                    checked={selectedUsers.includes(user.username)}
+                    onChange={() => handleCheckboxChange(user.username)}
+                  />
+                </Col>
+              ))}
+            </Row>
+          </Form.Group>
 
-        <h5>Select Friends:</h5>
-        <ListGroup className="mb-3">
-          {friends.map((f, idx) => (
-            <ListGroup.Item
-              key={idx}
-              className="d-flex justify-content-between align-items-center"
-              onClick={() => toggleFriend(f.username)}
-              active={selectedFriends.includes(f.username)}
-              style={{ cursor: "pointer" }}
-            >
-              {f.username}
-            </ListGroup.Item>
-          ))}
-        </ListGroup>
-
-        <Button variant="primary" className="w-100" onClick={handleSplitRequest}>
-          Send Split Request
-        </Button>
-
+          <Button variant="primary" type="submit">
+            Split
+          </Button>
+        </Form>
         {message && <p className="text-center mt-3">{message}</p>}
       </Card>
     </Container>

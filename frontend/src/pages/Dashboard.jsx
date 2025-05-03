@@ -9,14 +9,43 @@ function Dashboard({ token }) {
   const [selectedCard, setSelectedCard] = useState("");
   const [cardCVV, setcardCVV] = useState("");
 
+  const [user, setUser] = useState(null);
+  const [pendingCount, setPendingCount] = useState(0);
+
   useEffect(() => {
     fetchCards();
     fetchBalance();
+    fetchUser();
+    fetchPendingCount();
   }, []);
+
+  const fetchUser = async () => {
+    try {
+      const res = await axios.get("http://localhost:5001/me", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      setUser(res.data);
+    } catch (err) {
+      console.error("Error fetching user info", err);
+    }
+  };
+
+  const fetchPendingCount = async () => {
+    try {
+      const res = await axios.get("http://localhost:5001/pending-requests-count", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      setPendingCount(res.data.count);
+    } catch (err) {
+      console.error("Error fetching pending count", err);
+    }
+  };
 
   const fetchCards = async () => {
     try {
-      const res = await axios.get("http://localhost:4000/my-cards", { headers: { Authorization: `Bearer ${token}` } });
+      const res = await axios.get("http://localhost:4000/my-cards", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       setCards(res.data);
     } catch (error) {
       console.error("Error fetching cards", error);
@@ -25,7 +54,9 @@ function Dashboard({ token }) {
 
   const fetchBalance = async () => {
     try {
-      const res = await axios.get("http://localhost:5001/balance", { headers: { Authorization: `Bearer ${token}` } });
+      const res = await axios.get("http://localhost:5001/balance", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       setBalance(res.data.balance);
     } catch (error) {
       console.error("Error fetching balance", error);
@@ -58,6 +89,18 @@ function Dashboard({ token }) {
 
   return (
     <Container className="mt-4">
+      {user && (
+        <Card className="mb-4">
+          <Card.Body>
+            <h3>Welcome, {user.full_name || user.username} 👋</h3>
+            <p>
+              You have <strong>{pendingCount}</strong> pending money request
+              {pendingCount !== 1 ? "s" : ""}.
+            </p>
+          </Card.Body>
+        </Card>
+      )}
+
       <Row>
         <Col md={6}>
           <Card className="mb-4">
@@ -79,10 +122,14 @@ function Dashboard({ token }) {
                     onChange={(e) => setTopupAmount(e.target.value)}
                   />
                 </Form.Group>
-                <Button className="mt-2" variant="success" onClick={handleTopup} disabled={!selectedCard}>
+                <Button
+                  className="mt-2"
+                  variant="success"
+                  onClick={handleTopup}
+                  disabled={!selectedCard}
+                >
                   Top-up
                 </Button>
-                
               </Form>
             </Card.Body>
           </Card>
@@ -108,7 +155,10 @@ function Dashboard({ token }) {
                       <td>{card.cvv}</td>
                       <td>{card.balance}</td>
                       <td>
-                        <Button variant="primary" onClick={() => setCard(card)} >
+                        <Button
+                          variant="primary"
+                          onClick={() => setCard(card)}
+                        >
                           Select
                         </Button>
                       </td>
@@ -116,20 +166,18 @@ function Dashboard({ token }) {
                   ))}
                 </tbody>
               </Table>
-                <Button variant="primary" className="mt-3 me-2" href="/add-card">
+              <Button variant="primary" className="mt-3 me-2" href="/add-card">
                 Add Card
-                </Button>
-                <Button variant="secondary" className="mt-3" href="/profile">
+              </Button>
+              <Button variant="secondary" className="mt-3" href="/profile">
                 Update Profile
-                </Button>
-                <Button variant="danger" className="mt-3" onClick={handleLogout}>
-                    Logout
-                </Button>
+              </Button>
+              <Button variant="danger" className="mt-3" onClick={handleLogout}>
+                Logout
+              </Button>
             </Card.Body>
           </Card>
-            
         </Col>
-        
       </Row>
     </Container>
   );

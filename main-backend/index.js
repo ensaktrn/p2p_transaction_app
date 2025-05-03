@@ -100,6 +100,23 @@ app.post("/login", async (req, res) => {
   }
 });
 
+app.get("/me", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT id, username, full_name, is_admin, is_merchant FROM users WHERE id = $1",
+      [req.user.id]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/users", authenticateToken, async (req, res) => {
+  const result = await pool.query("SELECT id, username FROM users WHERE is_merchant = false");
+  res.json(result.rows);
+});
+
 
 // Kullanıcı Profilini Görüntüleme
 app.get("/profile", authenticateToken, async (req, res) => {
@@ -243,90 +260,120 @@ app.post("/transfer", authenticateToken, async (req, res) => {
   }
 });
 
-app.post("/request-money", authenticateToken, async (req, res) => {
-  const { recipientUsername, amount } = req.body;
+app.post("/money-request", authenticateToken, async (req, res) => {
+  const { username, amount } = req.body;
+
+  const parsedAmount = parseFloat(amount);
+  if (!username || isNaN(parsedAmount) || parsedAmount <= 0) {
+    return res.status(400).json({ error: "Invalid input" });
+  }
 
   try {
-    const recipient = await pool.query(
-      "SELECT id FROM users WHERE username = $1",
-      [recipientUsername]
-    );
-
-    if (recipient.rows.length === 0) {
+    const userRes = await pool.query("SELECT id FROM users WHERE username = $1", [username]);
+    if (userRes.rows.length === 0) {
       return res.status(404).json({ error: "Recipient not found" });
     }
 
+    const recipientId = userRes.rows[0].id;
+
     await pool.query(
-      "INSERT INTO money_requests (sender_id, recipient_id, amount) VALUES ($1, $2, $3)",
-      [req.user.id, recipient.rows[0].id, amount]
+      "INSERT INTO money_requests (sender_id, recipient_id, amount, status, created_at) VALUES ($1, $2, $3, 'pending', NOW())",
+      [req.user.id, recipientId, parsedAmount]
     );
 
-    res.json({ message: "Money request sent" });
+    res.json({ message: "Money request sent successfully." });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Database error" });
+    console.error("Money request error:", err);
+    res.status(500).json({ error: "Server error" });
   }
 });
 
 app.get("/money-requests", authenticateToken, async (req, res) => {
   try {
     const result = await pool.query(
-      "SELECT * FROM money_requests WHERE recipient_id = $1 AND status = 'pending'",
+      `SELECT mr.id, mr.amount, u.username AS sender_username, mr.created_at
+       FROM money_requests mr
+       JOIN users u ON u.id = mr.sender_id
+       WHERE mr.recipient_id = $1 AND mr.status = 'pending'`,
       [req.user.id]
     );
+
     res.json(result.rows);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Database error" });
+    console.error("Get requests error:", err);
+    res.status(500).json({ error: "Server error" });
   }
 });
 
-app.post("/respond-money-request", authenticateToken, async (req, res) => {
+
+
+app.post("/money-request/respond", authenticateToken, async (req, res) => {
   const { requestId, action } = req.body;
 
+  if (!["accept", "reject"].includes(action)) {
+    return res.status(400).json({ error: "Invalid action" });
+  }
+
   try {
-    const requestQuery = await pool.query(
+    const reqRes = await pool.query(
       "SELECT * FROM money_requests WHERE id = $1 AND recipient_id = $2",
       [requestId, req.user.id]
     );
 
-    if (requestQuery.rows.length === 0) {
+    if (reqRes.rows.length === 0) {
       return res.status(404).json({ error: "Request not found" });
     }
 
-    const request = requestQuery.rows[0];
-
-    if (request.status !== "pending") {
-      return res.status(400).json({ error: "Request already handled" });
+    const request = reqRes.rows[0];
+    if (request.status !== 'pending') {
+      return res.status(400).json({ error: "Already responded." });
     }
 
-    // Balance kontrolü giriş yapan kullanıcıdan yapılmalı (yani request.recipient_id === req.user.id)
-    const payer = await pool.query("SELECT balance FROM users WHERE id = $1", [req.user.id]);
-    const normalizedAmount = parseFloat(request.amount).toFixed(2);
-    const payerBalance = parseFloat(payer.rows[0].balance).toFixed(2);
-    if (parseFloat(payerBalance) < parseFloat(normalizedAmount)) {
+    if (action === 'reject') {
+      await pool.query("UPDATE money_requests SET status = 'rejected' WHERE id = $1", [requestId]);
+      return res.json({ message: "Request rejected." });
+    }
+
+    // accept işlemi
+    const balanceRes = await pool.query("SELECT balance FROM users WHERE id = $1", [req.user.id]);
+    const balance = parseFloat(balanceRes.rows[0].balance);
+    const amount = parseFloat(request.amount);
+
+    if (balance < amount) {
       return res.status(400).json({ error: "Insufficient balance" });
     }
 
-    // Transfer işlemi
     await pool.query("BEGIN");
-    await pool.query("UPDATE users SET balance = balance - $1 WHERE id = $2", [normalizedAmount, request.recipient_id]);
-    await pool.query("UPDATE users SET balance = balance + $1 WHERE id = $2", [normalizedAmount, request.sender_id]);
-    await pool.query(
-      "INSERT INTO transactions (sender_id, recipient_id, amount, created_at) VALUES ($1, $2, $3, NOW())",
-      [request.recipient_id, request.sender_id, normalizedAmount]
-    );
-    await pool.query("UPDATE money_requests SET status = 'accepted' WHERE id = $1", [request.id]);
+    await pool.query("UPDATE users SET balance = balance - $1 WHERE id = $2", [amount, req.user.id]);
+    await pool.query("UPDATE users SET balance = balance + $1 WHERE id = $2", [amount, request.sender_id]);
+    await pool.query("INSERT INTO transactions (sender_id, recipient_id, amount, created_at) VALUES ($1, $2, $3, NOW())",
+      [req.user.id, request.sender_id, amount]);
+    await pool.query("UPDATE money_requests SET status = 'accepted' WHERE id = $1", [requestId]);
     await pool.query("COMMIT");
 
-    res.json({ message: "Request accepted and transaction completed" });
+    res.json({ message: "Request accepted and transferred." });
 
-  } catch (error) {
+  } catch (err) {
     await pool.query("ROLLBACK");
-    console.error(error);
-    res.status(500).json({ error: "Internal server error" });
+    console.error("Respond error:", err);
+    res.status(500).json({ error: "Server error" });
   }
 });
+
+app.get("/pending-requests-count", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT COUNT(*) FROM money_requests WHERE recipient_id = $1 AND status = 'pending'",
+      [req.user.id]
+    );
+    res.json({ count: parseInt(result.rows[0].count) });
+  } catch (err) {
+    console.error("Pending count error", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+
 
 app.get("/transactions", authenticateToken, async (req, res) => {
   try {
@@ -528,13 +575,59 @@ app.get("/friends-list", authenticateToken, async (req, res) => {
 });
 
 app.get("/merchants", authenticateToken, async (req, res) => {
+  const result = await pool.query("SELECT id, username, full_name FROM users WHERE is_merchant = true");
+  res.json(result.rows);
+});
+
+app.post("/subscribe-merchant", authenticateToken, async (req, res) => {
+  const { merchantId } = req.body;
+
+  if (!merchantId) {
+    return res.status(400).json({ error: "Missing merchant ID" });
+  }
+
   try {
-    const merchants = await pool.query(
-      "SELECT username FROM users WHERE is_merchant = true"
+    // Merchant gerçekten merchant mı?
+    const checkMerchant = await pool.query("SELECT * FROM users WHERE id = $1 AND is_merchant = true", [merchantId]);
+    if (checkMerchant.rows.length === 0) {
+      return res.status(404).json({ error: "Merchant not found" });
+    }
+
+    // Aynı kullanıcı daha önce abone olmuş mu?
+    const check = await pool.query(
+      "SELECT * FROM merchant_subscriptions WHERE user_id = $1 AND merchant_id = $2",
+      [req.user.id, merchantId]
     );
-    res.json(merchants.rows);
-  } catch (error) {
-    console.error(error);
+
+    if (check.rows.length > 0) {
+      return res.status(400).json({ error: "Already subscribed." });
+    }
+
+    // Aboneliği kaydet
+    await pool.query(
+      "INSERT INTO merchant_subscriptions (user_id, merchant_id) VALUES ($1, $2)",
+      [req.user.id, merchantId]
+    );
+
+    res.json({ message: "Subscribed successfully." });
+  } catch (err) {
+    console.error("Subscription error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/merchant/subscribers", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT u.id, u.username, u.full_name
+      FROM merchant_subscriptions s
+      JOIN users u ON s.user_id = u.id
+      WHERE s.merchant_id = $1
+    `, [req.user.id]);
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Fetch subscribers error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -620,36 +713,389 @@ app.get("/merchant-transactions", authenticateToken, async (req, res) => {
   }
 });
 
-app.post("/split-request", authenticateToken, async (req, res) => {
-  const { recipients, totalAmount } = req.body;
-  const senderId = req.user.id;
-
-  if (!recipients || recipients.length === 0 || !totalAmount || totalAmount <= 0) {
-    return res.status(400).json({ error: "Invalid split request" });
-  }
-
-  const splitAmount = (parseFloat(totalAmount) / recipients.length).toFixed(2);
+app.post("/merchant/request-payment", authenticateToken, async (req, res) => {
+  const { username, amount } = req.body;
 
   try {
-    for (const username of recipients) {
-      // Her alıcıyı bul
-      const userRes = await pool.query("SELECT id FROM users WHERE username = $1", [username]);
+    const me = await pool.query("SELECT is_admin FROM users WHERE id = $1", [req.user.id]);
+    if (me.rows[0]?.is_admin) return res.status(403).json({ error: "Admins cannot request payments." });
 
-      if (userRes.rows.length === 0) continue; // kullanıcı bulunamazsa geç
-      
-      const recipientId = userRes.rows[0].id;
+    const user = await pool.query("SELECT id FROM users WHERE username = $1", [username]);
+    if (user.rows.length === 0) return res.status(404).json({ error: "User not found" });
 
-      // Money request oluştur
+    await pool.query(
+      "INSERT INTO merchant_requests (merchant_id, user_id, amount) VALUES ($1, $2, $3)",
+      [req.user.id, user.rows[0].id, amount]
+    );
+
+    res.json({ message: "Payment request sent" });
+  } catch (err) {
+    res.status(500).json({ error: "Server error" });
+  }
+});
+app.get("/merchant/requests", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT r.id, r.amount, r.status, r.created_at, u.username AS merchant
+      FROM merchant_requests r
+      JOIN users u ON r.merchant_id = u.id
+      WHERE r.user_id = $1 AND r.status = 'pending'
+      ORDER BY r.created_at DESC
+    `, [req.user.id]);
+
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: "Server error" });
+  }
+});
+app.post("/merchant/handle-request", authenticateToken, async (req, res) => {
+  const { requestId, action } = req.body; // action = 'accept' | 'reject'
+
+  try {
+    const r = await pool.query("SELECT * FROM merchant_requests WHERE id = $1", [requestId]);
+    const request = r.rows[0];
+
+    if (!request || request.user_id !== req.user.id || request.status !== 'pending') {
+      return res.status(400).json({ error: "Invalid request" });
+    }
+
+    if (action === "reject") {
+      await pool.query("UPDATE merchant_requests SET status = 'rejected' WHERE id = $1", [requestId]);
+      return res.json({ message: "Payment rejected" });
+    }
+
+    // Check user balance
+    const balanceCheck = await pool.query("SELECT balance FROM users WHERE id = $1", [req.user.id]);
+    if (parseFloat(balanceCheck.rows[0].balance) < parseFloat(request.amount)) {
+      return res.status(400).json({ error: "Insufficient balance" });
+    }
+
+    // Proceed with payment
+    await pool.query("BEGIN");
+    await pool.query("UPDATE users SET balance = balance - $1 WHERE id = $2", [request.amount, req.user.id]);
+    await pool.query("UPDATE users SET balance = balance + $1 WHERE id = $2", [request.amount, request.merchant_id]);
+    await pool.query("INSERT INTO transactions (sender_id, recipient_id, amount, created_at) VALUES ($1, $2, $3, NOW())",
+      [req.user.id, request.merchant_id, request.amount]);
+    await pool.query("UPDATE merchant_requests SET status = 'accepted' WHERE id = $1", [requestId]);
+    await pool.query("COMMIT");
+
+    res.json({ message: "Payment completed" });
+
+  } catch (err) {
+    await pool.query("ROLLBACK");
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/merchant/request-history", authenticateToken, async (req, res) => {
+  const result = await pool.query(`
+    SELECT r.id, r.amount, r.status, r.created_at, u.username
+    FROM merchant_requests r
+    JOIN users u ON r.user_id = u.id
+    WHERE r.merchant_id = $1
+    ORDER BY r.created_at DESC
+  `, [req.user.id]);
+
+  res.json(result.rows);
+});
+app.get("/merchant/transactions", authenticateToken, async (req, res) => {
+  const result = await pool.query(`
+    SELECT t.id, t.amount, t.created_at, u.username AS sender
+    FROM transactions t
+    JOIN users u ON t.sender_id = u.id
+    WHERE t.recipient_id = $1
+    ORDER BY t.created_at DESC
+  `, [req.user.id]);
+
+  res.json(result.rows);
+});
+
+
+app.post("/split-payment", authenticateToken, async (req, res) => {
+  const { amount, participantUsernames } = req.body;
+
+  if (!amount || !participantUsernames || participantUsernames.length === 0) {
+    return res.status(400).json({ error: "Amount and participants required" });
+  }
+
+  // Katılımcıları DB'den al
+  try {
+    const usersResult = await pool.query(
+      "SELECT id, username, balance FROM users WHERE username = ANY($1::text[])",
+      [participantUsernames]
+    );
+
+    const participants = usersResult.rows;
+
+    if (participants.length !== participantUsernames.length) {
+      return res.status(404).json({ error: "Some users not found" });
+    }
+
+    const perPersonAmount = parseFloat(amount) / participantUsernames.length;
+
+    // Yeterli bakiye kontrolü
+    for (const p of participants) {
+      if (parseFloat(p.balance) < perPersonAmount) {
+        return res.status(400).json({ error: `User ${p.username} has insufficient balance` });
+      }
+    }
+
+    await pool.query("BEGIN");
+
+    // Herkesten bakiye düş + transaction kaydet
+    for (const p of participants) {
+      await pool.query("UPDATE users SET balance = balance - $1 WHERE id = $2", [perPersonAmount, p.id]);
       await pool.query(
-        "INSERT INTO money_requests (sender_id, recipient_id, amount, created_at) VALUES ($1, $2, $3, NOW())",
-        [senderId, recipientId, splitAmount]
+        "INSERT INTO transactions (sender_id, recipient_id, amount, created_at) VALUES ($1, NULL, $2, NOW())",
+        [p.id, perPersonAmount]
       );
     }
 
-    res.json({ message: "Split money requests sent successfully!" });
+    await pool.query("COMMIT");
+    res.json({ message: "Split payment completed successfully" });
 
-  } catch (error) {
-    console.error("Split Request Error:", error);
+  } catch (err) {
+    await pool.query("ROLLBACK");
+    console.error("Split error:", err);
     res.status(500).json({ error: "Server error" });
   }
+});
+
+app.post("/money-requests/:id/accept", authenticateToken, async (req, res) => {
+  const requestId = req.params.id;
+
+  try {
+    const reqRes = await pool.query("SELECT * FROM money_requests WHERE id = $1", [requestId]);
+    if (reqRes.rows.length === 0) return res.status(404).json({ error: "Request not found" });
+
+    const request = reqRes.rows[0];
+
+    // Request'i sadece ilgili kullanıcı kabul edebilir
+    if (request.recipient_id !== req.user.id) {
+      return res.status(403).json({ error: "Not authorized" });
+    }
+
+    // Kullanıcının bakiyesi yeterli mi?
+    const balanceRes = await pool.query("SELECT balance FROM users WHERE id = $1", [request.recipient_id]);
+    const balance = parseFloat(balanceRes.rows[0].balance);
+    const amount = parseFloat(request.amount);
+
+    if (balance < amount) {
+      return res.status(400).json({ error: "Insufficient balance" });
+    }
+
+    await pool.query("BEGIN");
+
+    // Bakiye güncelle
+    await pool.query("UPDATE users SET balance = balance - $1 WHERE id = $2", [amount, request.recipient_id]);
+    await pool.query("UPDATE users SET balance = balance + $1 WHERE id = $2", [amount, request.sender_id]);
+
+    // Transaction kaydet
+    await pool.query(
+      "INSERT INTO transactions (sender_id, recipient_id, amount, created_at) VALUES ($1, $2, $3, NOW())",
+      [request.recipient_id, request.sender_id, amount]
+    );
+
+    // İsteği sil
+    await pool.query("DELETE FROM money_requests WHERE id = $1", [requestId]);
+
+    await pool.query("COMMIT");
+
+    res.json({ message: "Request accepted and payment sent." });
+  } catch (err) {
+    await pool.query("ROLLBACK");
+    console.error("Accept error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/money-requests/:id/reject", authenticateToken, async (req, res) => {
+  const requestId = req.params.id;
+
+  try {
+    const reqRes = await pool.query("SELECT * FROM money_requests WHERE id = $1", [requestId]);
+    if (reqRes.rows.length === 0) return res.status(404).json({ error: "Request not found" });
+
+    const request = reqRes.rows[0];
+
+    if (request.recipient_id !== req.user.id) {
+      return res.status(403).json({ error: "Not authorized" });
+    }
+
+    await pool.query("DELETE FROM money_requests WHERE id = $1", [requestId]);
+    res.json({ message: "Request rejected." });
+  } catch (err) {
+    console.error("Reject error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// For admin
+
+app.get("/admin/users", authenticateToken, async (req, res) => {
+  try {
+    const adminCheck = await pool.query("SELECT is_admin FROM users WHERE id = $1", [req.user.id]);
+    if (!adminCheck.rows[0]?.is_admin) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    const result = await pool.query("SELECT id, username, full_name, email, phone, balance FROM users ORDER BY id");
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Admin user list error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/admin/cards", authenticateToken, async (req, res) => {
+  try {
+    const adminCheck = await pool.query("SELECT is_admin FROM users WHERE id = $1", [req.user.id]);
+    if (!adminCheck.rows[0]?.is_admin) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    const result = await pool.query(`
+      SELECT cards.card_number, cards.balance, cards.card_holder, cards.expiry, users.username
+      FROM cards
+      JOIN users ON cards.user_id = users.id
+      ORDER BY cards.card_number
+    `);
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Admin get cards error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/admin/update-balance", authenticateToken, async (req, res) => {
+  const { userId, newBalance } = req.body;
+
+  try {
+    const adminCheck = await pool.query("SELECT is_admin FROM users WHERE id = $1", [req.user.id]);
+    if (!adminCheck.rows[0]?.is_admin) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    await pool.query("UPDATE users SET balance = $1 WHERE id = $2", [newBalance, userId]);
+    res.json({ message: "Balance updated." });
+  } catch (err) {
+    console.error("Balance update error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/admin/transactions", authenticateToken, async (req, res) => {
+  try {
+    const admin = await pool.query("SELECT is_admin FROM users WHERE id = $1", [req.user.id]);
+    if (!admin.rows[0]?.is_admin) return res.status(403).json({ error: "Unauthorized" });
+
+    const result = await pool.query(`
+      SELECT t.id, t.amount, t.created_at, u1.username AS sender, u2.username AS recipient
+      FROM transactions t
+      JOIN users u1 ON t.sender_id = u1.id
+      JOIN users u2 ON t.recipient_id = u2.id
+      WHERE t.is_deleted = false
+      ORDER BY t.created_at DESC
+    `);
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Fetch transactions error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/admin/delete-transaction", authenticateToken, async (req, res) => {
+  const { transactionId } = req.body;
+
+  try {
+    const adminCheck = await pool.query("SELECT is_admin FROM users WHERE id = $1", [req.user.id]);
+    if (!adminCheck.rows[0]?.is_admin) return res.status(403).json({ error: "Unauthorized" });
+
+    const txRes = await pool.query("SELECT * FROM transactions WHERE id = $1", [transactionId]);
+    const tx = txRes.rows[0];
+    if (!tx || tx.is_deleted) return res.status(404).json({ error: "Transaction not found" });
+
+    const amount = parseFloat(tx.amount);
+
+    await pool.query("BEGIN");
+
+    await pool.query("UPDATE users SET balance = balance + $1 WHERE id = $2", [amount, tx.sender_id]);
+    await pool.query("UPDATE users SET balance = balance - $1 WHERE id = $2", [amount, tx.recipient_id]);
+
+    await pool.query("UPDATE transactions SET is_deleted = true WHERE id = $1", [transactionId]);
+
+    await pool.query("COMMIT");
+
+    res.json({ message: "Transaction cancelled successfully." });
+
+  } catch (err) {
+    await pool.query("ROLLBACK");
+    console.error("Delete transaction error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/admin/update-user", authenticateToken, async (req, res) => {
+  const {
+    userId,
+    full_name = "",
+    phone = "",
+    email = "",
+    username = "",
+    makeAdmin = false,
+    balance = 0
+  } = req.body;
+
+  try {
+    const requester = await pool.query("SELECT is_admin FROM users WHERE id = $1", [req.user.id]);
+    if (!requester.rows[0]?.is_admin) {
+      return res.status(403).json({ error: "Only admins can update users." });
+    }
+
+    // Kullanıcı kontrolü
+    const userResult = await pool.query("SELECT is_merchant FROM users WHERE id = $1", [userId]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const isMerchant = userResult.rows[0].is_merchant;
+    const adminValue = isMerchant ? false : !!makeAdmin;
+
+    await pool.query(
+      `UPDATE users
+       SET full_name = $1,
+           phone = $2,
+           email = $3,
+           username = $4,
+           is_admin = $5,
+           balance = $6
+       WHERE id = $7`,
+      [
+        full_name,
+        phone,
+        email,
+        username,
+        adminValue,
+        parseFloat(balance),
+        userId
+      ]
+    );
+
+    res.json({ message: "User updated successfully." });
+  } catch (err) {
+    console.error("❌ Update user error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+
+
+app.get("/admin/users", authenticateToken, async (req, res) => {
+  const adminCheck = await pool.query("SELECT is_admin FROM users WHERE id = $1", [req.user.id]);
+  if (!adminCheck.rows[0]?.is_admin) return res.status(403).json({ error: "Access denied" });
+
+  const result = await pool.query("SELECT id, username, full_name, email, phone, is_admin, is_merchant, balance FROM users ORDER BY id");
+  res.json(result.rows);
 });

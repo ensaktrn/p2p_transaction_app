@@ -13,13 +13,30 @@ function Login({ setToken }) {
     e.preventDefault();
     try {
       const res = await axios.post("http://localhost:5001/login", form);
-      localStorage.setItem("token", res.data.token);
-      setToken(res.data.token);
-      navigate("/dashboard");
+      const token = res.data.token;
+      localStorage.setItem("token", token);
+      setToken(token);
+  
+      const meRes = await axios.get("http://localhost:5001/me", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+  
+      const isAdmin = meRes.data.is_admin;
+      const isMerchant = meRes.data.is_merchant;
+      if (isAdmin) {
+        window.location.href = "/admin-dashboard";
+      }
+        else if (isMerchant) {
+        window.location.href = "/merchant-dashboard";
+      } else {
+        window.location.href = "/dashboard";
+      }
+  
     } catch (error) {
       alert("Login failed");
     }
   };
+  
 
   return (
     <Container className="d-flex justify-content-center align-items-center vh-100">

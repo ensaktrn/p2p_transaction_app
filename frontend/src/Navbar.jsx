@@ -32,8 +32,9 @@ const Navbar = () => {
             <Link className="nav-link" to="/split-payment">Split Payment</Link>
           </li>
           <li className="nav-item">
-            <Link className="nav-link" to="/merchants">Merchants</Link>
+            <Link className="nav-link" to="/merchant-requests">Merchant Requests</Link>
           </li>
+          
           <li className="nav-item">
             <Link className="nav-link" to="/transactions">History</Link>
           </li>

@@ -1,142 +1,107 @@
 import { useState, useEffect } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Container, Card, Form, Button, ListGroup } from "react-bootstrap";
 
-const MoneyRequests = () => {
-  const [searchParams] = useSearchParams();
-  const prefilledUsername = searchParams.get("username") || "";
-  const [username, setUsername] = useState(prefilledUsername);
+function MoneyRequests() {
+  const [username, setUsername] = useState("");
   const [amount, setAmount] = useState("");
-  const [message, setMessage] = useState("");
   const [requests, setRequests] = useState([]);
+  const [message, setMessage] = useState("");
 
   useEffect(() => {
     fetchRequests();
   }, []);
 
   const fetchRequests = async () => {
-    try {
-      const res = await fetch("http://localhost:5001/money-requests", {
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem("token")}`,
-        },
-      });
-      const data = await res.json();
-      setRequests(data);
-    } catch (error) {
-      console.error("Error fetching requests", error);
-    }
+    const res = await fetch("http://localhost:5001/money-requests", {
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem("token")}`,
+      },
+    });
+    const data = await res.json();
+    setRequests(data);
   };
 
-  const sendRequest = async () => {
-    setMessage("");
-
-    if (!username || !amount) {
-      setMessage("Please enter all fields.");
-      return;
-    }
-
-    try {
-      const res = await fetch("http://localhost:5001/request-money", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${localStorage.getItem("token")}`,
-        },
-        body: JSON.stringify({ recipientUsername: username, amount }),
-      });
-
-      const data = await res.json();
-      if (res.ok) {
-        setMessage("Money request sent!");
-        setUsername("");
-        setAmount("");
-      } else {
-        setMessage(data.error || "Request failed.");
-      }
-    } catch (error) {
-      console.error("Request error", error);
-      setMessage("Server error.");
-    }
+  const sendRequest = async (e) => {
+    e.preventDefault();
+    const res = await fetch("http://localhost:5001/money-request", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${localStorage.getItem("token")}`,
+      },
+      body: JSON.stringify({ username, amount }),
+    });
+    const data = await res.json();
+    setMessage(data.message || data.error);
+    setUsername("");
+    setAmount("");
   };
 
-  const respondRequest = async (requestId, action) => {
-    try {
-      const res = await fetch("http://localhost:5001/respond-money-request", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${localStorage.getItem("token")}`,
-        },
-        body: JSON.stringify({ requestId, action }),
-      });
-
-      const data = await res.json();
-      if (res.ok) {
-        alert(data.message);
-        fetchRequests();
-      } else {
-        alert(data.error || "Error responding to request.");
-      }
-    } catch (error) {
-      console.error("Error responding to request", error);
-    }
+  const handleResponse = async (id, action) => {
+    const res = await fetch("http://localhost:5001/money-request/respond", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${localStorage.getItem("token")}`,
+      },
+      body: JSON.stringify({ requestId: id, action }),
+    });
+    const data = await res.json();
+    setMessage(data.message || data.error);
+    fetchRequests();
   };
 
   return (
-    <div className="container mt-4">
-      <h2>Request Money</h2>
+    <Container className="mt-4">
+      <Card className="p-4">
+        <h3>Request Money</h3>
+        <Form onSubmit={sendRequest}>
+          <Form.Control
+            type="text"
+            placeholder="Username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            className="mb-2"
+            required
+          />
+          <Form.Control
+            type="number"
+            placeholder="Amount"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            className="mb-2"
+            required
+          />
+          <Button type="submit" variant="primary" className="w-100">
+            Send Request
+          </Button>
+        </Form>
 
-      <input
-        type="text"
-        className="form-control my-2"
-        placeholder="Username"
-        value={username}
-        onChange={(e) => setUsername(e.target.value)}
-      />
-      <input
-        type="number"
-        className="form-control my-2"
-        placeholder="Amount"
-        value={amount}
-        onChange={(e) => setAmount(e.target.value)}
-      />
-      <button className="btn btn-primary" onClick={sendRequest}>
-        Request
-      </button>
-
-      {message && <p className="mt-3">{message}</p>}
-
-      {/* Gelen İstekler */}
-      <div className="mt-5">
-        <h4>Incoming Money Requests</h4>
+        <hr />
+        <h4>Incoming Requests</h4>
         {requests.length === 0 ? (
-          <p>No incoming requests.</p>
+          <p>No pending requests</p>
         ) : (
-          <ul className="list-group">
-            {requests.map((req) => (
-              <li key={req.id} className="list-group-item d-flex justify-content-between align-items-center">
-                <span>From: {req.sender_username} | Amount: ${req.amount}</span>
+          <ListGroup>
+            {requests.map((r) => (
+              <ListGroup.Item key={r.id} className="d-flex justify-content-between align-items-center">
+                <span>{r.sender_username} requested ${r.amount}</span>
                 <div>
-                  <button
-                    className="btn btn-success btn-sm me-2"
-                    onClick={() => respondRequest(req.id, "accept")}
-                  >
+                  <Button variant="success" size="sm" className="me-2" onClick={() => handleResponse(r.id, "accept")}>
                     Accept
-                  </button>
-                  <button
-                    className="btn btn-danger btn-sm"
-                    onClick={() => respondRequest(req.id, "reject")}
-                  >
+                  </Button>
+                  <Button variant="danger" size="sm" onClick={() => handleResponse(r.id, "reject")}>
                     Reject
-                  </button>
+                  </Button>
                 </div>
-              </li>
+              </ListGroup.Item>
             ))}
-          </ul>
+          </ListGroup>
         )}
-      </div>
-    </div>
+        {message && <p className="mt-3 text-center">{message}</p>}
+      </Card>
+    </Container>
   );
-};
+}
 
 export default MoneyRequests;
