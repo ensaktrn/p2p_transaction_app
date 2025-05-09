@@ -133,3 +133,14 @@ INSERT INTO valid_cards (card_number, holder_name, expiry_date, cvv) VALUES
 ('6011209876543210', 'Penelope Barnes', '2027-03-11', 987),
 ('3566002020360506', 'Anthony Powell', '2028-02-10', 321),
 ('6767709999999998', 'Stella Watson', '2026-01-09', 654);
+
+
+INSERT INTO users (username, password, full_name, email, phone, is_admin)
+VALUES (
+  'admin',
+  'admin',
+  'Admin User',
+  'admin@example.com',
+  '123-324-1243',
+  true
+);
